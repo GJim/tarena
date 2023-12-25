@@ -108,7 +108,8 @@ contract SimpleSwap is ISimpleSwap {
         tokenB = _tokenB;
     }
 
-    function setRatio(uint256 qA, uint256 qB) external {
+    function setRatio(address token1, address token2, uint256 q1, uint256 q2) external {
+        (uint256 qA, uint256 qB) = token1 < token2 ? (q1, q2) : (q2, q1);
         _qA = qA;
         _qB = qB;
     }

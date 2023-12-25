@@ -19,7 +19,7 @@ contract Fund is ReentrancyGuard {
     uint256 public traderFeeMantissa;
     uint256 public totalShares;
     mapping(address => uint256) public shares;
-    mapping(address => uint256) public sharePriceAtInvestment;
+    mapping(address => uint256) public investorSharePrice;
 
     // Constants
     uint256 constant DECIMAL = 1e18;
@@ -54,15 +54,20 @@ contract Fund is ReentrancyGuard {
         }
 
         // Calculate share price
-        uint256 sharePrice = prevTotalValue == 0 ? 1e18 : prevTotalValue / totalShares;
+        uint256 sharePrice = prevTotalValue == 0 ? chipPrice : prevTotalValue / totalShares;
         
         // Calculate shares to mint
         uint256 sharesToMint = (chipAmount * chipPrice) / sharePrice;
 
+        // Calculate average share price of investor
+        uint256 prevSharePrice = investorSharePrice[msg.sender];
+        uint256 prevShareAmount = shares[msg.sender];
+        uint256 avgSharePrice = prevSharePrice == 0 ? sharePrice : (prevSharePrice * prevShareAmount + sharePrice * sharesToMint) / (prevShareAmount + sharesToMint);
+
         // [effect part]
 
         // Update user's share price at investment
-        sharePriceAtInvestment[msg.sender] = sharePrice;
+        investorSharePrice[msg.sender] = avgSharePrice;
 
         // Mint shares to user
         shares[msg.sender] += sharesToMint;
@@ -96,12 +101,13 @@ contract Fund is ReentrancyGuard {
         // Calculate fee to charge
         uint256 platformFeeAmount = 0;
         uint256 traderFeeAmount = 0;
+        // owner will not be charged any fee
         if(msg.sender == trader) {
-            // charge platform fee
+            // charge platform fee to trader
             platformFeeAmount = shareAmount * PLATFROM_FEE / DECIMAL;
-        } else {
-            // check current fund is profit or loss
-            uint256 investorSharePriceAtInvestment = sharePriceAtInvestment[msg.sender];
+        } else if(msg.sender != owner) {
+            // check trader fee only when fund is in profit
+            uint256 investorSharePriceAtInvestment = investorSharePrice[msg.sender];
             if(sharePrice > investorSharePriceAtInvestment) {
                 // calculate profit
                 uint256 profit = sharePrice - investorSharePriceAtInvestment;
