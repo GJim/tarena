@@ -9,11 +9,11 @@ import {SimplePriceOracle, IPriceOracle} from "src/SimplePriceOracle.sol";
 import {Fund} from "src/Fund.sol";
 
 contract Token is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+   constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 
-    function mint(address account, uint256 value) public {
-        _mint(account, value);
-    }
+   function mint(address account, uint256 value) public {
+       _mint(account, value);
+   }
 }
 
 contract FundTest is Test {
@@ -110,7 +110,7 @@ contract FundTest is Test {
 
         // 8. check Investor A receive 29 targets after divest.
         vm.startPrank(userA);
-        uint256 sharesA = fund.shares(userA);
+        uint256 sharesA = fund.balanceOf(userA);
         fund.divest(sharesA);
         uint256 targetBalanceA = target.balanceOf(userA);
         assertEq(targetBalanceA, 29e18); // Check Investor A receives 30 targets
@@ -118,7 +118,7 @@ contract FundTest is Test {
 
         // 9. check Investor B receive 10 targets after divest.
         vm.startPrank(userB);
-        uint256 sharesB = fund.shares(userB);
+        uint256 sharesB = fund.balanceOf(userB);
         fund.divest(sharesB);
         uint256 targetBalanceB = target.balanceOf(userB);
         assertEq(targetBalanceB, 10e18); // Check Investor B receives 10 targets
@@ -126,7 +126,7 @@ contract FundTest is Test {
 
         // 10. check trader receive 0.99 targets after divest.
         vm.startPrank(trader);
-        uint256 sharesTrader = fund.shares(trader);
+        uint256 sharesTrader = fund.balanceOf(trader);
         fund.divest(sharesTrader);
         uint256 targetBalanceTrader = target.balanceOf(trader);
         assertEq(targetBalanceTrader, 0.99e18);
@@ -134,14 +134,14 @@ contract FundTest is Test {
 
         // 10. check owner receive 0.01 targets after divest.
         vm.startPrank(owner);
-        uint256 sharesOwner = fund.shares(owner);
+        uint256 sharesOwner = fund.balanceOf(owner);
         fund.divest(sharesOwner);
         uint256 targetBalanceOwner = target.balanceOf(owner);
         assertEq(targetBalanceOwner, 0.01e18);
         vm.stopPrank();
 
         // 11. check all asset are 0 after divest.
-        assertEq(fund.shares(address(this)), 0);
+        assertEq(fund.balanceOf(address(this)), 0);
         assertEq(chip.balanceOf(address(fund)), 0);
         assertEq(target.balanceOf(address(fund)), 0);
     }
