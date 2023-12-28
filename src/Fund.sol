@@ -10,9 +10,9 @@ import "./SimplePriceOracle.sol";
 contract Fund is IERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    string public name;
-    string public symbol;
-    uint256 public decimals;
+    string public constant name = 'Trader Arena';
+    string public constant symbol = 'TA';
+    uint8 public constant decimals = 18;
     uint256 public totalSupply;
     address public owner;
     address public trader;
@@ -22,7 +22,7 @@ contract Fund is IERC20, ReentrancyGuard {
     SimplePriceOracle public oracle;
     uint256 public traderFeeMantissa;
     
-    mapping(address => uint256) private _shares;
+    mapping(address => uint256) public balanceOf;
     mapping(address investor => mapping(address spender => uint256)) private _allowances;
     mapping(address => uint256) public investorSharePrice;
 
@@ -47,9 +47,6 @@ contract Fund is IERC20, ReentrancyGuard {
     error TAInvalidTrader();
 
     constructor(address _trader, address _chipToken, address _targetToken, address _dex, address _oracle, uint256 _traderFeeMantissa) {
-        name = "Trader Arena";
-        symbol = "TA";
-        decimals = 18;
         owner = msg.sender;
         trader = _trader;
         chipToken = IERC20(_chipToken);
@@ -57,10 +54,6 @@ contract Fund is IERC20, ReentrancyGuard {
         dex = SimpleSwap(_dex);
         oracle = SimplePriceOracle(_oracle);
         traderFeeMantissa = _traderFeeMantissa;
-    }
-
-    function balanceOf(address investor) public view virtual returns (uint256) {
-        return _shares[investor];
     }
 
     function transfer(address to, uint256 value) public virtual returns (bool) {
@@ -94,18 +87,18 @@ contract Fund is IERC20, ReentrancyGuard {
     }
 
     function _update(address from, address to, uint256 value) internal virtual {
-        uint256 fromBalance = _shares[from];
+        uint256 fromBalance = balanceOf[from];
         if (fromBalance < value) {
             revert ERC20InsufficientBalance(from, fromBalance, value);
         }
         unchecked {
             // Overflow not possible: value <= fromBalance <= totalSupply.
-            _shares[from] = fromBalance - value;
+            balanceOf[from] = fromBalance - value;
         }
 
         unchecked {
             // Overflow not possible: balance + value is at most totalSupply, which we know fits into a uint256.
-            _shares[to] += value;
+            balanceOf[to] += value;
         }
 
         emit Transfer(from, to, value);
@@ -163,7 +156,7 @@ contract Fund is IERC20, ReentrancyGuard {
 
         // Calculate average share price of investor
         uint256 prevSharePrice = investorSharePrice[msg.sender];
-        uint256 prevShareAmount = _shares[msg.sender];
+        uint256 prevShareAmount = balanceOf[msg.sender];
         uint256 avgSharePrice = prevSharePrice == 0 ? sharePrice : (prevSharePrice * prevShareAmount + sharePrice * sharesToMint) / (prevShareAmount + sharesToMint);
 
         // [effect part]
@@ -172,7 +165,7 @@ contract Fund is IERC20, ReentrancyGuard {
         investorSharePrice[msg.sender] = avgSharePrice;
 
         // Mint shares to user
-        _shares[msg.sender] += sharesToMint;
+        balanceOf[msg.sender] += sharesToMint;
         totalSupply += sharesToMint;
 
         // [interactions part]
@@ -190,7 +183,7 @@ contract Fund is IERC20, ReentrancyGuard {
         }
 
         // sender shares must be greater than amount
-        uint256 investorShareBalance = _shares[msg.sender];
+        uint256 investorShareBalance = balanceOf[msg.sender];
         if (investorShareBalance < shareAmount) {
             revert ERC20InsufficientBalance(msg.sender, investorShareBalance, shareAmount);
         }
@@ -234,12 +227,12 @@ contract Fund is IERC20, ReentrancyGuard {
         uint256 targetToTransfer = targetAmount * sharesToBurn / totalSupply;
 
         // [effect part]
-        _shares[msg.sender] -= shareAmount;
+        balanceOf[msg.sender] -= shareAmount;
         totalSupply -= sharesToBurn;
         if(platformFeeAmount > 0) {
-            _shares[owner] += platformFeeAmount;
+            balanceOf[owner] += platformFeeAmount;
         } else if(traderFeeAmount > 0) {
-            _shares[trader] += traderFeeAmount;
+            balanceOf[trader] += traderFeeAmount;
         }
 
         // [interactions part]
