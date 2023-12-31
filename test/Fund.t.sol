@@ -5,8 +5,9 @@ import "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SimpleSwap} from "src/SimpleSwap.sol";
 import {ISimpleSwap} from "src/ISimpleSwap.sol";
-import {SimplePriceOracle, IPriceOracle} from "src/SimplePriceOracle.sol";
-import {Fund} from "src/Fund.sol";
+import {SimplePriceOracle} from "src/SimplePriceOracle.sol";
+import {Host} from "src/Host.sol";
+import {IFund, Fund} from "src/Fund.sol";
 
 contract Token is ERC20 {
    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
@@ -61,15 +62,21 @@ contract FundTest is Test {
 
     function testScenario() public {
         vm.startPrank(owner);
-        // deploy fund
-        uint256 traderFeeMantissa = 0.1e18;
-        Fund fund = new Fund(trader, address(chip), address(target), address(dex), address(oracle), traderFeeMantissa);
+        // deploy host
+        Host host = new Host();
+        host.initialize(address(chip), address(target), address(dex), address(oracle));
         // mint chip for investor A and B
         chip.mint(userA, 20e18);
         chip.mint(userB, 10e18);
         // The price of chip and target token are both 10 dollar
         oracle.setPrice(address(chip), 10e18);  // $10
         oracle.setPrice(address(target), 10e18); // $10
+        vm.stopPrank();
+
+        vm.startPrank(trader);
+        uint256 traderFeeMantissa = 0.1e18;
+        address fundAddress = host.createFund(traderFeeMantissa);
+        IFund fund = IFund(fundAddress);
         vm.stopPrank();
 
         // 1. Investor A deposit 10 chips. [Total: 100, chip: 10, target: 0]
@@ -111,7 +118,7 @@ contract FundTest is Test {
         // 8. check Investor A receive 29 targets after divest.
         vm.startPrank(userA);
         uint256 sharesA = fund.balanceOf(userA);
-        fund.divest(sharesA);
+        fund.divest(sharesA, userA);
         uint256 targetBalanceA = target.balanceOf(userA);
         assertEq(targetBalanceA, 29e18); // Check Investor A receives 30 targets
         vm.stopPrank();
@@ -119,7 +126,7 @@ contract FundTest is Test {
         // 9. check Investor B receive 10 targets after divest.
         vm.startPrank(userB);
         uint256 sharesB = fund.balanceOf(userB);
-        fund.divest(sharesB);
+        fund.divest(sharesB, userB);
         uint256 targetBalanceB = target.balanceOf(userB);
         assertEq(targetBalanceB, 10e18); // Check Investor B receives 10 targets
         vm.stopPrank();
@@ -127,15 +134,14 @@ contract FundTest is Test {
         // 10. check trader receive 0.99 targets after divest.
         vm.startPrank(trader);
         uint256 sharesTrader = fund.balanceOf(trader);
-        fund.divest(sharesTrader);
+        fund.divest(sharesTrader, trader);
         uint256 targetBalanceTrader = target.balanceOf(trader);
         assertEq(targetBalanceTrader, 0.99e18);
         vm.stopPrank();
 
         // 10. check owner receive 0.01 targets after divest.
         vm.startPrank(owner);
-        uint256 sharesOwner = fund.balanceOf(owner);
-        fund.divest(sharesOwner);
+        host.divestFund(address(fund), owner);
         uint256 targetBalanceOwner = target.balanceOf(owner);
         assertEq(targetBalanceOwner, 0.01e18);
         vm.stopPrank();

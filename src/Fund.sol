@@ -1,26 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./SimpleSwap.sol";
-import "./SimplePriceOracle.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IHost} from "./IHost.sol";
+import {IFund} from "./IFund.sol";
+import {IArena} from "./IArena.sol";
+import {SimpleSwap} from "./SimpleSwap.sol";
+import {SimplePriceOracle} from "./SimplePriceOracle.sol";
 
-contract Fund is IERC20, ReentrancyGuard {
+contract Fund is IFund, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     string public constant name = 'Trader Arena';
     string public constant symbol = 'TA';
     uint8 public constant decimals = 18;
     uint256 public totalSupply;
-    address public owner;
+    IHost public host;
     address public trader;
     IERC20 public chipToken;
     IERC20 public targetToken;
+    // recording the balance of tokens avoid flashload attack
+    uint256 public chipBalance;
+    uint256 public targetBalance;
     SimpleSwap public dex;
     SimplePriceOracle public oracle;
     uint256 public traderFeeMantissa;
+    uint256 public totalInvest;
+    uint256 public accruedProfit;
+    uint256 public accruedLoss;
     
     mapping(address => uint256) public balanceOf;
     mapping(address investor => mapping(address spender => uint256)) private _allowances;
@@ -30,24 +40,22 @@ contract Fund is IERC20, ReentrancyGuard {
     uint256 constant DECIMAL = 1e18;
     uint256 constant PLATFROM_FEE = 1e16;
 
-    // Event declarations
-    event Invested(address investor, uint256 amount, uint256 sharesMinted);
-    event Divested(address investor, uint256 amount, uint256 fee, uint256 sharesBurned);
-    event Swapped(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
+    struct DivestLocalVars {
+        uint256 investorShareBalance;
+        uint256 prevChipAmount;
+        uint256 prevTargetAmount;
+        uint256 investorSharePriceAtInvestment;
+    }
+    
+    constructor() {
+        host = IHost(msg.sender);
+    }
 
-    error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed);
-    error ERC20InvalidSender(address sender);
-    error ERC20InvalidReceiver(address receiver);
-    error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed);
-    error ERC20InvalidApprover(address approver);
-    error ERC20InvalidSpender(address spender);
-    error TAZeroAmount();
-    error TAInsufficientBalance();
-    error TAInvalidToken();
-    error TAInvalidTrader();
+    function initialize(address _trader, address _chipToken, address _targetToken, address _dex, address _oracle, uint256 _traderFeeMantissa) external {
+        if(msg.sender != address(host)) {
+            revert InvalidHost();
+        }
 
-    constructor(address _trader, address _chipToken, address _targetToken, address _dex, address _oracle, uint256 _traderFeeMantissa) {
-        owner = msg.sender;
         trader = _trader;
         chipToken = IERC20(_chipToken);
         targetToken = IERC20(_targetToken);
@@ -56,21 +64,21 @@ contract Fund is IERC20, ReentrancyGuard {
         traderFeeMantissa = _traderFeeMantissa;
     }
 
-    function transfer(address to, uint256 value) public virtual returns (bool) {
+    function transfer(address to, uint256 value) external returns (bool) {
         _transfer(msg.sender, to, value);
         return true;
     }
 
-    function allowance(address investor, address spender) public view virtual returns (uint256) {
+    function allowance(address investor, address spender) external view returns (uint256) {
         return _allowances[investor][spender];
     }
 
-    function approve(address spender, uint256 value) public virtual returns (bool) {
+    function approve(address spender, uint256 value) external returns (bool) {
         _approve(msg.sender, spender, value);
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 value) public virtual returns (bool) {
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
         _spendAllowance(from, msg.sender, value);
         _transfer(from, to, value);
         return true;
@@ -86,7 +94,7 @@ contract Fund is IERC20, ReentrancyGuard {
         _update(from, to, value);
     }
 
-    function _update(address from, address to, uint256 value) internal virtual {
+    function _update(address from, address to, uint256 value) internal {
         uint256 fromBalance = balanceOf[from];
         if (fromBalance < value) {
             revert ERC20InsufficientBalance(from, fromBalance, value);
@@ -108,7 +116,7 @@ contract Fund is IERC20, ReentrancyGuard {
         _approve(investor, spender, value, true);
     }
 
-    function _approve(address investor, address spender, uint256 value, bool emitEvent) internal virtual {
+    function _approve(address investor, address spender, uint256 value, bool emitEvent) internal {
         if (investor == address(0)) {
             revert ERC20InvalidApprover(address(0));
         }
@@ -121,8 +129,8 @@ contract Fund is IERC20, ReentrancyGuard {
         }
     }
 
-    function _spendAllowance(address investor, address spender, uint256 value) internal virtual {
-        uint256 currentAllowance = allowance(investor, spender);
+    function _spendAllowance(address investor, address spender, uint256 value) internal {
+        uint256 currentAllowance = _allowances[investor][spender];
         if (currentAllowance != type(uint256).max) {
             if (currentAllowance < value) {
                 revert ERC20InsufficientAllowance(spender, currentAllowance, value);
@@ -133,26 +141,59 @@ contract Fund is IERC20, ReentrancyGuard {
         }
     }
 
+    function _totalValue(uint256 chipPrice, uint256 chipAmount, uint256 targetAmount) internal view returns (uint256) {
+        uint256 totalValue = chipAmount * chipPrice;
+        if(targetAmount > 0) {
+            uint256 targetPrice = oracle.getPrice(address(targetToken));
+            totalValue += targetAmount * targetPrice;
+        }
+        return totalValue;
+    }
+
+    function _pricePerShare(uint256 chipPrice, uint256 chipAmount, uint256 targetAmount) internal view returns (uint256) {
+        // Calculate total value
+        uint256 totalValue = _totalValue(chipPrice, chipAmount, targetAmount);
+
+        // Calculate share price
+        uint256 sharePrice = totalValue == 0 ? chipPrice : totalValue / totalSupply;
+
+        return sharePrice;
+    }
+
+    function performance() external view returns (uint256, uint256) {
+        uint256 chipPrice = oracle.getPrice(address(chipToken));
+        uint256 totalValue = _totalValue(chipPrice, chipBalance, targetBalance);
+        uint positive = accruedProfit;
+        uint negative = accruedLoss;
+        if(totalValue > totalInvest) {
+            positive = positive + totalValue - totalInvest;
+        } else {
+            negative = negative + totalInvest - totalValue;
+        }
+
+        if(positive > negative) {
+            positive = positive - negative;
+            return (positive, 0);
+        } else {
+            negative = negative - positive;
+            return (0, negative);
+        }
+    }
+
     function invest(uint256 chipAmount) external nonReentrant {
         if(chipAmount == 0) {
-            revert TAZeroAmount();
+            revert InvalidAmount();
         }
 
         // Calculate previous total value
         uint256 chipPrice = oracle.getPrice(address(chipToken));
-        uint256 prevChipAmount = chipToken.balanceOf(address(this));
-        uint256 prevTotalValue = prevChipAmount * chipPrice;
-        uint256 targetAmount = targetToken.balanceOf(address(this));
-        if(targetAmount > 0) {
-            uint256 targetPrice = oracle.getPrice(address(targetToken));
-            prevTotalValue += targetAmount * targetPrice;
-        }
-
+        
         // Calculate share price
-        uint256 sharePrice = prevTotalValue == 0 ? chipPrice : prevTotalValue / totalSupply;
+        uint256 sharePrice = _pricePerShare(chipPrice, chipBalance, targetBalance);
         
         // Calculate shares to mint
-        uint256 sharesToMint = (chipAmount * chipPrice) / sharePrice;
+        uint256 investValue = chipAmount * chipPrice;
+        uint256 sharesToMint = investValue / sharePrice;
 
         // Calculate average share price of investor
         uint256 prevSharePrice = investorSharePrice[msg.sender];
@@ -161,12 +202,19 @@ contract Fund is IERC20, ReentrancyGuard {
 
         // [effect part]
 
+        // update total invest value
+        totalInvest += investValue;
+
         // Update user's share price at investment
         investorSharePrice[msg.sender] = avgSharePrice;
 
         // Mint shares to user
         balanceOf[msg.sender] += sharesToMint;
         totalSupply += sharesToMint;
+
+        // Update chip and target balance
+        // need to handle meme coin in the future
+        chipBalance += chipAmount;
 
         // [interactions part]
 
@@ -177,45 +225,45 @@ contract Fund is IERC20, ReentrancyGuard {
         emit Transfer(address(0), msg.sender, sharesToMint);
     }
 
-    function divest(uint256 shareAmount) external nonReentrant {
+    function divest(uint256 shareAmount, address receiver) external nonReentrant {
         if(shareAmount == 0) {
-            revert TAZeroAmount();
+            revert InvalidAmount();
         }
 
+        DivestLocalVars memory vars;
+
         // sender shares must be greater than amount
-        uint256 investorShareBalance = balanceOf[msg.sender];
-        if (investorShareBalance < shareAmount) {
-            revert ERC20InsufficientBalance(msg.sender, investorShareBalance, shareAmount);
+        vars.investorShareBalance = balanceOf[msg.sender];
+        if (vars.investorShareBalance < shareAmount) {
+            revert ERC20InsufficientBalance(msg.sender, vars.investorShareBalance, shareAmount);
         }
 
         // Calculate previous total value
-        uint256 chipPrice = oracle.getPrice(address(chipToken));
-        uint256 prevChipAmount = chipToken.balanceOf(address(this));
-        uint256 prevTotalValue = prevChipAmount * chipPrice;
-        uint256 targetAmount = targetToken.balanceOf(address(this));
-        if(targetAmount > 0) {
-            uint256 targetPrice = oracle.getPrice(address(targetToken));
-            prevTotalValue += targetAmount * targetPrice;
-        }
+        vars.prevChipAmount = chipBalance;
+        vars.prevTargetAmount = targetBalance;
 
         // Calculate share price
-        uint256 sharePrice = prevTotalValue == 0 ? DECIMAL : prevTotalValue / totalSupply;
+        uint256 sharePrice = _pricePerShare(oracle.getPrice(address(chipToken)), vars.prevChipAmount, vars.prevTargetAmount);
 
         // Calculate fee to charge
         uint256 platformFeeAmount = 0;
         uint256 traderFeeAmount = 0;
-        // owner will not be charged any fee
+        uint256 totalProfit = 0;
+        uint256 totalLoss = 0;
+        vars.investorSharePriceAtInvestment = investorSharePrice[msg.sender];
+        // host will not be charged any fee
         if(msg.sender == trader) {
             // charge platform fee to trader
             platformFeeAmount = shareAmount * PLATFROM_FEE / DECIMAL;
-        } else if(msg.sender != owner) {
+        } else if(msg.sender != address(host)) {
             // check trader fee only when fund is in profit
-            uint256 investorSharePriceAtInvestment = investorSharePrice[msg.sender];
-            if(sharePrice > investorSharePriceAtInvestment) {
+            if(sharePrice > vars.investorSharePriceAtInvestment) {
                 // calculate profit
-                uint256 profit = sharePrice - investorSharePriceAtInvestment;
+                totalProfit = (sharePrice - vars.investorSharePriceAtInvestment) * shareAmount;
                 // charge trader fee
-                traderFeeAmount = shareAmount * profit * traderFeeMantissa / sharePrice / DECIMAL;
+                traderFeeAmount = totalProfit * traderFeeMantissa / sharePrice / DECIMAL;
+            } else {
+                totalLoss = (vars.investorSharePriceAtInvestment - sharePrice) * shareAmount;
             }
         }
         
@@ -223,24 +271,46 @@ contract Fund is IERC20, ReentrancyGuard {
         uint256 totalFee = platformFeeAmount + traderFeeAmount;
         uint256 sharesToBurn = shareAmount - totalFee;
         // Calculate tokens to transfer
-        uint256 chipToTransfer = prevChipAmount * sharesToBurn / totalSupply;
-        uint256 targetToTransfer = targetAmount * sharesToBurn / totalSupply;
+        uint256 chipToTransfer = vars.prevChipAmount * sharesToBurn / totalSupply;
+        uint256 targetToTransfer = vars.prevTargetAmount * sharesToBurn / totalSupply;
 
         // [effect part]
+
+        // update total invest value
+        totalInvest = totalInvest - (vars.investorSharePriceAtInvestment * shareAmount);
+
+        // update fund accumulated profit
+        if(totalProfit > 0) {
+            accruedProfit += totalProfit;
+        }
+        if(totalLoss > 0) {
+            accruedLoss += totalLoss;
+        }
+        // update user's share balance
         balanceOf[msg.sender] -= shareAmount;
+        // update total share supply
         totalSupply -= sharesToBurn;
+        // taxed profit from platform or trader
         if(platformFeeAmount > 0) {
-            balanceOf[owner] += platformFeeAmount;
+            balanceOf[address(host)] += platformFeeAmount;
         } else if(traderFeeAmount > 0) {
             balanceOf[trader] += traderFeeAmount;
         }
+        // update token balances
+        // need to handle meme coin in the future
+        if(chipToTransfer > 0) {
+            chipBalance -= chipToTransfer;
+        }
+        if(targetToTransfer > 0) {
+            targetBalance -= targetToTransfer;
+        }
 
         // [interactions part]
-        chipToken.transfer(msg.sender, chipToTransfer);
-        targetToken.transfer(msg.sender, targetToTransfer);
+        chipToken.transfer(receiver, chipToTransfer);
+        targetToken.transfer(receiver, targetToTransfer);
 
         if(platformFeeAmount > 0) {
-            emit Transfer(msg.sender, owner, platformFeeAmount);
+            emit Transfer(msg.sender, address(host), platformFeeAmount);
         } else if(traderFeeAmount > 0) {
             emit Transfer(msg.sender, trader, traderFeeAmount);
         }
@@ -252,27 +322,87 @@ contract Fund is IERC20, ReentrancyGuard {
     function swap(address tokenOut, uint256 ratio) external nonReentrant {
         // Check that tokenOut is either chip or target
         if(tokenOut != address(chipToken) && tokenOut != address(targetToken)) {
-            revert TAInvalidToken();
+            revert InvalidToken();
         }
         if(trader != msg.sender) {
-            revert TAInvalidTrader();
+            revert InvalidTrader();
         }
 
         // Calculate amount to swap
         uint256 amountOut;
         address tokenIn;
+        uint256 newChipBalance;
+        uint256 newTargetBalance;
         if(tokenOut == address(chipToken)) {
             tokenIn = address(targetToken);
-            amountOut = chipToken.balanceOf(address(this)) * ratio / DECIMAL;
+            amountOut = chipBalance * ratio / DECIMAL;
+            newChipBalance = chipBalance - amountOut;
         } else {
             tokenIn = address(chipToken);
-            amountOut = targetToken.balanceOf(address(this)) * ratio / DECIMAL;
+            amountOut = targetBalance * ratio / DECIMAL;
+            newTargetBalance = targetBalance - amountOut;
         }
         
         IERC20(tokenOut).approve(address(dex), amountOut);
         uint256 amountIn = dex.swap(tokenOut, tokenIn, amountOut);
 
+        // need to avoid reentrancy risk in the future
+        if(tokenOut == address(chipToken)) {
+            newTargetBalance = targetBalance + amountIn;
+        } else {
+            newChipBalance = chipBalance + amountIn;
+        }
+        // update token balances
+        // need to handle meme coin in the future
+        chipBalance = newChipBalance;
+        targetBalance = newTargetBalance;
+
         emit Swapped(trader, tokenOut, amountIn, amountOut);
     }
 
+    function registerArena(address arena) external nonReentrant {
+        if(msg.sender != trader) {
+            revert InvalidTrader();
+        }
+        
+        if(!host.hasArena(arena)) {
+            revert InvalidArena();
+        }
+
+        IArena(arena).register();
+    }
+
+    function challengeArena(address arena, uint8 _rank) external nonReentrant {
+        if(msg.sender != trader) {
+            revert InvalidTrader();
+        }
+        
+        if(!host.hasArena(arena)) {
+            revert InvalidArena();
+        }
+
+        IArena(arena).challenge(_rank);
+    }
+
+    function mintArena(address arena, uint8 _rank) external nonReentrant {
+        if(msg.sender != trader) {
+            revert InvalidTrader();
+        }
+        
+        if(!host.hasArena(arena)) {
+            revert InvalidArena();
+        }
+
+        IArena(arena).mint(_rank);
+    }
+
+    function transferNFT(address arena, address to, uint256 tokenId) external nonReentrant {
+        if(msg.sender != trader) {
+            revert InvalidTrader();
+        }
+
+        // transfer NFT
+        // IERC721(arena).approve(to, tokenId);
+        IERC721(arena).transferFrom(address(this), to, tokenId);
+    }
 }
