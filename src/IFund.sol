@@ -37,4 +37,9 @@ interface IFund {
     function divest(uint256 shareAmount, address receiver) external;
     function swap(address tokenOut, uint256 ratio) external;
     function performance() external view returns (uint256, uint256);
+
+    function registerArena(address arena) external returns (bool);
+    function challengeArena(address arena, uint8 _rank) external returns (bool);
+    function mintArena(address arena, uint8 _rank) external returns (bool);
+    function transferNFT(address arena, address to, uint256 tokenId) external;
 }

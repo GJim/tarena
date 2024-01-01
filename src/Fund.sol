@@ -360,7 +360,7 @@ contract Fund is IFund, ReentrancyGuard {
         emit Swapped(trader, tokenOut, amountIn, amountOut);
     }
 
-    function registerArena(address arena) external nonReentrant {
+    function registerArena(address arena) external nonReentrant returns (bool) {
         if(msg.sender != trader) {
             revert InvalidTrader();
         }
@@ -370,9 +370,10 @@ contract Fund is IFund, ReentrancyGuard {
         }
 
         IArena(arena).register();
+        return true;
     }
 
-    function challengeArena(address arena, uint8 _rank) external nonReentrant {
+    function challengeArena(address arena, uint8 _rank) external nonReentrant returns (bool) {
         if(msg.sender != trader) {
             revert InvalidTrader();
         }
@@ -382,9 +383,10 @@ contract Fund is IFund, ReentrancyGuard {
         }
 
         IArena(arena).challenge(_rank);
+        return true;
     }
 
-    function mintArena(address arena, uint8 _rank) external nonReentrant {
+    function mintArena(address arena, uint8 _rank) external nonReentrant returns (bool) {
         if(msg.sender != trader) {
             revert InvalidTrader();
         }
@@ -394,6 +396,7 @@ contract Fund is IFund, ReentrancyGuard {
         }
 
         IArena(arena).mint(_rank);
+        return true;
     }
 
     function transferNFT(address arena, address to, uint256 tokenId) external nonReentrant {

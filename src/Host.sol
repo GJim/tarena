@@ -63,7 +63,7 @@ contract Host is IHost, ReentrancyGuard {
         iFund.divest(iFund.balanceOf(address(this)), receiver);
     }
 
-    function createArena() external returns (address arena) {
+    function createArena(uint256 rewardAmount) external returns (address arena) {
         if(msg.sender != owner) {
             revert InvalidOwner();
         }
@@ -74,9 +74,21 @@ contract Host is IHost, ReentrancyGuard {
         assembly {
             arena := create2(0, add(bytecode, 32), mload(bytecode), salt)
         }
-        IArena(arena).initialize(currentBlock+100, currentBlock+200, currentBlock+300, chipToken);
+        IERC20(chipToken).approve(arena, rewardAmount);
+        IArena(arena).initialize(currentBlock+100, currentBlock+200, currentBlock+300, chipToken, rewardAmount);
         hasArena[arena] = true;
         // emit Arena;
+    }
+
+    function forfeitReward(address arena, address receiver) external {
+        if(msg.sender != owner) {
+            revert InvalidOwner();
+        }
+        IArena iArena = IArena(arena);
+        uint256 balanceBefore = IERC20(chipToken).balanceOf(address(this));
+        iArena.clear(chipToken);
+        uint256 balanceAfter = IERC20(chipToken).balanceOf(address(this));
+        IERC20(chipToken).transfer(receiver, balanceAfter - balanceBefore);
     }
 
     function setOwner(address _owner) external {

@@ -15,6 +15,7 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
     uint256 public mintDeadline;
     IHost public host;
     IERC20 public rewardToken;
+    uint256 public rewardAmount;
     mapping(address => bool) public participants;
     mapping(address => uint256) public initProfit;
     mapping(uint8 => address) public ranks;
@@ -24,7 +25,7 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
         host = IHost(msg.sender);
     }
 
-    function initialize(uint256 _registrationDeadline, uint256 _challengeDeadline, uint256 _mintDeadline, address _rewardToken) external {
+    function initialize(uint256 _registrationDeadline, uint256 _challengeDeadline, uint256 _mintDeadline, address _rewardToken, uint256 _rewardAmount) external {
         if(msg.sender != address(host)) {
             revert InvalidHost();
         }
@@ -33,6 +34,9 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
         challengeDeadline = _challengeDeadline;
         mintDeadline = _mintDeadline;
         rewardToken = IERC20(_rewardToken);
+        rewardAmount = _rewardAmount;
+
+        rewardToken.transferFrom(msg.sender, address(this), _rewardAmount);
     }
 
     function register() external nonReentrant returns(bool) {
@@ -41,7 +45,7 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
             revert ExceededDeadline();
         }
 
-        if(host.hasFund(msg.sender)) {
+        if(!host.hasFund(msg.sender)) {
             revert InvalidFund();
         }
 
@@ -105,10 +109,9 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
         if(challengerRank != 0) {
             // remove challenger's previous rank
             ranks[challengerRank] = address(0);
-        } else {
-            // add challenger in rank
-            inRanks[msg.sender] = _rank;
         }
+        // add challenger in rank
+        inRanks[msg.sender] = _rank;
 
         // update challenger new rank
         ranks[_rank] = msg.sender;
@@ -132,13 +135,13 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
         }
 
         // calculate reward amount
-        uint256 rewardAmount = rewardToken.balanceOf(address(this));
+        uint256 winnerReward = rewardAmount;
         if(_rank == 1) {
-            rewardAmount = rewardAmount * 5 / 10;
+            winnerReward = winnerReward * 5 / 10;
         } else if(_rank == 2) {
-            rewardAmount = rewardAmount * 3 / 10;
+            winnerReward = winnerReward * 3 / 10;
         } else {
-            rewardAmount = rewardAmount * 2 / 10;
+            winnerReward = winnerReward * 2 / 10;
         }
 
         // remove winner from rank
@@ -149,7 +152,7 @@ contract Arena is IArena, ERC721, ReentrancyGuard {
 
         // reward the trader
         address trader = IFund(msg.sender).trader();
-        rewardToken.transfer(trader, rewardAmount);
+        rewardToken.transfer(trader, winnerReward);
     }
 
     function clear(address _token) external {
