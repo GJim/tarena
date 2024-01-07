@@ -8,7 +8,7 @@
 ### Trader need a stage
 > With traditional institutions controlling the funds, we need to create a more open platform so that a new generation of traders can have an opportunity to shine.
 
-### Onvestor need a bright light
+### Investor need a bright light
 > Under the constraints of traditional concepts, we need more creative brave traders to help us ride the wind and waves.
 
 ## Purpose
