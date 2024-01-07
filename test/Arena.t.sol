@@ -59,6 +59,39 @@ contract ArenaTest is Test {
         vm.stopPrank();
     }
 
+    function testRegister() public {
+        // setup
+        vm.startPrank(owner);
+        chip.mint(owner, 1000e18);
+        chip.transfer(address(host), 1000e18);
+        address arena = host.createArena(1000e18);
+        vm.stopPrank();
+
+        // fail for fake fund
+        address fund = address(new Fund());
+        vm.startPrank(fund);
+        vm.expectRevert(IArena.InvalidFund.selector);
+        IArena(arena).register();
+        vm.stopPrank();
+
+        vm.startPrank(traderA);
+        address fundAddressA = host.createFund(0);
+        IFund fundA = IFund(fundAddressA);
+        oracle.setPrice(address(chip), 10e18);
+        chip.mint(traderA, 10e18);
+        chip.approve(fundAddressA, 10e18);
+        fundA.invest(10e18);
+        oracle.setPrice(address(chip), 5e18);
+        // fail for fund in loss
+        vm.expectRevert(IArena.InvalidFund.selector);
+        fundA.registerArena(arena);
+        // fail for deadline exceeded
+        vm.roll(block.number + 101);
+        vm.expectRevert(IArena.ExceededDeadline.selector);
+        fundA.registerArena(arena);
+        vm.stopPrank();
+    }
+
     function testScenario() public {
         /* setup scenario */
         // create an arena with 1000 chips as reward
@@ -166,15 +199,6 @@ contract ArenaTest is Test {
         // challenge deadline has passed
         vm.roll(block.number + 100);
 
-        
-        // IArena(arena).ranks(1);
-        // IArena(arena).ranks(2);
-        // IArena(arena).ranks(3);
-        // IArena(arena).inRanks(address(fundA));
-        // IArena(arena).inRanks(address(fundB));
-        // IArena(arena).inRanks(address(fundC));
-        // IArena(arena).inRanks(address(fundD));
-
         /* traders mint their NFT and apply their reward,
          * but trader C forget to apply reward */
         vm.startPrank(traderA);
@@ -183,6 +207,8 @@ contract ArenaTest is Test {
         assert(success);
         // get 50% of reward
         assertEq(chip.balanceOf(traderA), 500e18);
+        // get NFT
+        assertEq(IArena(arena).ownerOf(1), fundAddressA);
         vm.stopPrank();
         vm.startPrank(traderB);
         assertEq(chip.balanceOf(traderB), 0);
@@ -190,6 +216,8 @@ contract ArenaTest is Test {
         assert(success);
         // get 30% of reward
         assertEq(chip.balanceOf(traderB), 300e18);
+        // get NFT
+        assertEq(IArena(arena).ownerOf(2), fundAddressB);
         vm.stopPrank();
 
         // mint deadline has passed
@@ -202,5 +230,22 @@ contract ArenaTest is Test {
         uint256 afterBalance = chip.balanceOf(address(owner));
         assertEq(afterBalance - beforeBalance, 200e18);
         vm.stopPrank();
+
+        // check trader A transfer NFT from Fund A to Fund C
+        vm.startPrank(traderA);
+        fundA.transferNFT(arena, fundAddressC, 1);
+        assertEq(IArena(arena).ownerOf(1), fundAddressC);
+        vm.stopPrank();
+
+        // check arena ranks
+        assertEq(IArena(arena).ranks(1), fundAddressA);
+        assertEq(IArena(arena).ranks(2), fundAddressB);
+        assertEq(IArena(arena).ranks(3), fundAddressC);
+
+        // check arena inRanks
+        assertEq(IArena(arena).inRanks(address(fundA)), 0);
+        assertEq(IArena(arena).inRanks(address(fundB)), 0);
+        assertEq(IArena(arena).inRanks(address(fundC)), 3);
+        assertEq(IArena(arena).inRanks(address(fundD)), 0);
     }
 }

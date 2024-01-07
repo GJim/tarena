@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-interface IArena {
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+
+interface IArena is IERC721 {
 
     error InvalidHost();
     error InvalidFund();

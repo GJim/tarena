@@ -49,15 +49,31 @@ contract FundTest is Test {
         dex.addLiquidity(1000e18, 1000e18);
     }
 
-    function testSwap() public {
-        dex.setRatio(address(chip), address(target), 1, 1);
-        // swap 20 chip for 20 target
-        uint amountOut = dex.swap(address(chip), address(target), 20e18);
-        assertEq(amountOut, 20e18);
-        dex.setRatio(address(chip), address(target), 1, 2);
-        // swap 10 chip for 20 target
-        amountOut = dex.swap(address(chip), address(target), 10e18);
-        assertEq(amountOut, 20e18);
+    function testERC20() public {
+        vm.startPrank(owner);
+        Host host = new Host();
+        host.initialize(address(chip), address(target), address(dex), address(oracle));
+        address fundAddress = host.createFund(0);
+        IFund fund = IFund(fundAddress);
+        chip.mint(owner, 20e18);
+        oracle.setPrice(address(chip), 10e18);  // $10
+        chip.approve(address(fund), 20e18);
+        fund.invest(20e18);
+        // test total supply
+        assertEq(fund.totalSupply(), 20e18);
+        // test transfer
+        fund.transfer(userA, 10e18);
+        vm.stopPrank();
+        vm.startPrank(userA);
+        fund.approve(owner, 10e18);
+        vm.stopPrank();
+        vm.startPrank(owner);
+        fund.transferFrom(userA, userB, 5e18);
+        vm.stopPrank();
+        assertEq(fund.balanceOf(owner), 10e18);
+        assertEq(fund.balanceOf(userA), 5e18);
+        assertEq(fund.balanceOf(userB), 5e18);
+        assertEq(fund.allowance(userA, owner), 5e18);
     }
 
     function testScenario() public {
